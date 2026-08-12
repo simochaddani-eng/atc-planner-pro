@@ -1,14 +1,18 @@
-# app.py
+# app.py (Version avec le Design des Maquettes)
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 from scheduler_ortools import ATCSchedulerORTools
 from export_utils import generate_excel, generate_pdf
-from config_data import INSTRUCTORS
-from database import SessionLocal, Promotion
+from config_data import INSTRUCTORS, SIMULATORS
+from database import SessionLocal, Promotion, Phase, TimeSlot
 
-st.set_page_config(page_title="ATC Planner - OR-Tools", layout="wide")
+st.set_page_config(page_title="ATC Planner - Dashboard", layout="wide")
+
+# --- CHARGEMENT DU CSS ---
+with open('style.css') as f:
+    st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
 if 'scheduler_ortools' not in st.session_state:
     st.session_state.scheduler_ortools = ATCSchedulerORTools()
@@ -32,72 +36,75 @@ with st.sidebar:
                 if st.button(f"{status_emoji} {phase.phase_type}", key=f"btn_{phase.id}"):
                     st.session_state.current_phase_id = phase.id
                     st.rerun()
-    
-    st.divider()
-    st.caption(f"Instructeurs dispo : {sum(1 for i in INSTRUCTORS if i['available'])}/{len(INSTRUCTORS)}")
 
-# --- PAGE PRINCIPALE ---
-st.title("Planification Optimisée (IA)")
+# --- PAGE PRINCIPALE DASHBOARD ---
+st.title("ATC Planner - Gestion des simulateurs")
 
+# --- PARTIE 1 : LES 4 ENCARTS KPI (Comme la Maquette 1) ---
+# Récupération des données pour les encarts
+db = SessionLocal()
+all_phases = db.query(Phase).all()
+active_phases = [p for p in all_phases if p.status != "Terminée"]
+total_instructors_aff = len(set([i.instructor_name for p in all_phases for i in p.instructor_assignments]))
+db.close()
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.markdown(f"""
+    <div class="kpi-card">
+        <div class="kpi-title">Promotions actives</div>
+        <div class="kpi-value">{len(active_phases)}</div>
+        <div class="kpi-delta">📚 Total : {len(all_phases)} phases</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col2:
+    st.markdown(f"""
+    <div class="kpi-card">
+        <div class="kpi-title">Simulateurs disponibles</div>
+        <div class="kpi-value">{len(SIMULATORS)} / {len(SIMULATORS)}</div>
+        <div class="kpi-delta">🖥️ Toutes positions OK</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col3:
+    st.markdown(f"""
+    <div class="kpi-card">
+        <div class="kpi-title">Instructeurs affectés</div>
+        <div class="kpi-value">{total_instructors_aff}</div>
+        <div class="kpi-delta">👨‍🏫 Sur les phases actives</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col4:
+    st.markdown(f"""
+    <div class="kpi-card">
+        <div class="kpi-title">Phases en cours</div>
+        <div class="kpi-value">{len([p for p in all_phases if p.status == 'En cours'])}</div>
+        <div class="kpi-delta">🔄 {len([p for p in all_phases if p.status == 'Planifiée'])} planifiées</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+st.divider()
+
+# --- PARTIE 2 : ZONE DE CRÉATION OU VISUALISATION ---
 if st.session_state.current_phase_id:
+    # (Si une phase est sélectionnée : Code d'affichage du planning que vous aviez déjà)
     phase, slots, instructors = st.session_state.scheduler_ortools.get_phase_details(st.session_state.current_phase_id)
-    
     if phase:
-        col_t1, col_t2, col_t3 = st.columns([3, 1, 1])
-        with col_t1:
-            st.subheader(f"{phase.phase_type} - {phase.promotion.name}")
-        with col_t2:
-            current_status = st.selectbox(
-                "Statut", 
-                ["Planifiée", "En cours", "Terminée"],
-                index=["Planifiée", "En cours", "Terminée"].index(phase.status)
-            )
-            if current_status != phase.status:
-                st.session_state.scheduler_ortools.update_phase_status(phase.id, current_status)
-                st.rerun()
-        with col_t3:
-            st.write(f"Date fin : **{phase.end_date_estimated.strftime('%d/%m/%Y')}**")
-            st.write(f"Positions : **{phase.available_positions}**")
-            st.write(f"Groupes : **{len(set(s.group_name for s in slots))}**")
-
-        col_actions, col_recalc = st.columns([2, 2])
-        with col_actions:
-            st.write("📥 Exports :")
-            if st.button("📄 PDF", key="export_pdf"):
+        st.subheader(f"📋 {phase.phase_type} - {phase.promotion.name}")
+        col_left, col_right = st.columns([2, 1])
+        with col_left:
+            st.metric("Date de début", phase.start_date.strftime("%d/%m/%Y"))
+            st.metric("Date de fin estimée", phase.end_date_estimated.strftime("%d/%m/%Y"))
+            st.metric("Groupes", len(set(s.group_name for s in slots)))
+        with col_right:
+            if st.button("📊 Générer le rapport PDF", type="primary"):
                 pdf_buffer = generate_pdf(slots, phase.phase_type, phase.promotion.name)
-                st.download_button("Télécharger le PDF", data=pdf_buffer, file_name=f"Planning_{phase.phase_type}.pdf", mime="application/pdf")
-            if st.button("📊 Excel", key="export_xlsx"):
-                excel_buffer = generate_excel(slots, phase.phase_type)
-                st.download_button("Télécharger Excel", data=excel_buffer, file_name=f"Planning_{phase.phase_type}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        
-        with col_recalc:
-            st.write("⚙️ Recalcul (Optimisation) :")
-            recalc_hours = st.multiselect(
-                "Nouvelles plages horaires",
-                options=[8,9,10,11,13,14,15,16,17],
-                default=[9,10,11,14,15,16]
-            )
-            if st.button("🔁 Recalculer avec OR-Tools", type="secondary"):
-                if not recalc_hours:
-                    st.error("Sélectionnez au moins une plage horaire.")
-                else:
-                    with st.spinner("Le solveur OR-Tools recalcule le planning..."):
-                        result = st.session_state.scheduler_ortools.recalculate_phase_ortools(phase.id, sorted(recalc_hours))
-                        if result["status"] == "success":
-                            st.success("Planning optimal régénéré !")
-                            st.rerun()
-                        else:
-                            st.error(result["message"])
+                st.download_button("Télécharger PDF", data=pdf_buffer, file_name=f"Rapport_{phase.phase_type}.pdf")
 
-        st.divider()
-        
-        # Affichage Instructeurs
-        st.subheader("👨‍🏫 Instructeurs assignés")
-        for ins in instructors:
-            st.write(f"- **{ins.group_name}** : {ins.instructor_name}")
-        
-        # Affichage Planning
-        st.subheader("📅 Planning généré par l'IA")
+        # Graphique Gantt
         if slots:
             df_plot = pd.DataFrame([{
                 "group_name": s.group_name,
@@ -106,24 +113,14 @@ if st.session_state.current_phase_id:
                 "simulator": s.simulator,
                 "instructor": s.instructor_name
             } for s in slots])
-            
-            fig = px.timeline(
-                df_plot, 
-                x_start="start", 
-                x_end="end", 
-                y="simulator", 
-                color="group_name",
-                hover_data=["instructor"],
-                title="Occupation des simulateurs (Optimal)"
-            )
-            fig.update_layout(height=400)
+            fig = px.timeline(df_plot, x_start="start", x_end="end", y="simulator", color="group_name", title="Occupation des simulateurs")
             st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("Sélectionnez une phase existante ou créez-en une nouvelle.")
+    # (Si aucune phase sélectionnée : Formulaire de création)
+    st.info("➕ Créez une nouvelle phase de simulation ci-dessous.")
     with st.container(border=True):
         st.subheader("Créer une nouvelle phase (avec IA)")
-        
         col_f1, col_f2 = st.columns(2)
         with col_f1:
             promo_name = st.text_input("Nom de la promotion", value="P2025-G")
@@ -153,7 +150,7 @@ else:
             if not daily_hours:
                 st.error("Sélectionnez au moins une plage horaire.")
             else:
-                with st.spinner("Le solveur d'optimisation cherche la meilleure solution..."):
+                with st.spinner("Le solveur d'optimisation planifie les séances..."):
                     result = st.session_state.scheduler_ortools.create_phase_and_generate(
                         promo_name=promo_name,
                         student_count=student_count,
