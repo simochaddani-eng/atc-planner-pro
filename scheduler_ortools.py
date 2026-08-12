@@ -29,7 +29,6 @@ class ATCSchedulerORTools:
             student_count, sessions_per_student, duration_min, available_positions
         )
         
-        # Estimation simple de la durée (pour l'affichage)
         slots_per_day = len(daily_hours) if len(daily_hours) > 0 else 1
         days_needed = (groups_count * sessions_per_student) / (available_positions * slots_per_day)
         end_date = start_date + datetime.timedelta(days=int(days_needed) + 1)
@@ -51,14 +50,11 @@ class ATCSchedulerORTools:
         # 2. CONFIGURATION DU MODÈLE OR-TOOLS
         model = cp_model.CpModel()
         
-        # Variables de temps : On calcule le nombre de "slots" de 45 min possibles sur la période
         candidate_starts = []
         current_day = start_date
-        # On génère 30 jours de candidats (assez large pour trouver une solution)
         for day in range(30): 
             for hour in daily_hours:
                 start_dt = datetime.datetime.combine(current_day, datetime.time(hour, 0))
-                # Vérification maintenance
                 is_maint = False
                 if maintenance_slots:
                     for maint in maintenance_slots:
@@ -71,16 +67,15 @@ class ATCSchedulerORTools:
 
         num_slots = len(candidate_starts)
         if num_slots == 0:
+            db.close()
             return {"status": "failure", "message": "Aucun créneau horaire disponible avec les contraintes actuelles."}
 
-        # Variables : Chaque session (Groupe X Séance) doit avoir un horaire
         session_vars = {}
         for g in range(1, groups_count + 1):
             for s in range(1, sessions_per_student + 1):
                 key = f"G{g}_S{s}"
                 session_vars[key] = model.NewIntVar(0, num_slots - 1, key)
         
-        # CONTRAINTE : Capacité max de positions simultanées
         model.AddAllDifferent(session_vars.values())
 
         # 3. Résolution
@@ -88,7 +83,6 @@ class ATCSchedulerORTools:
         status = solver.Solve(model)
 
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-            # Sauvegarde des résultats
             available_instructors = [ins for ins in INSTRUCTORS if ins["available"]]
             
             plan_slots = []
@@ -122,15 +116,24 @@ class ATCSchedulerORTools:
                     plan_slots.append(slot)
             
             db.commit()
+            
+            # --- CORRECTION ICI : On lit les données avant de fermer ---
+            phase_id_final = new_phase.id
+            groups_count_final = groups_count
+            total_hours_final = round((groups_count * sessions_per_student * duration_min) / 60, 1)
+            end_date_final = end_date.strftime("%d/%m/%Y")
+            message_final = f"Planning optimal généré par OR-Tools pour {promo_name}."
+            # ---------------------------------------------------------
+            
             db.close()
             
             return {
                 "status": "success",
-                "phase_id": new_phase.id,
-                "groups_count": groups_count,
-                "total_hours": round((groups_count * sessions_per_student * duration_min) / 60, 1),
-                "end_date": end_date.strftime("%d/%m/%Y"),
-                "message": f"Planning optimal généré par OR-Tools pour {promo_name}."
+                "phase_id": phase_id_final,
+                "groups_count": groups_count_final,
+                "total_hours": total_hours_final,
+                "end_date": end_date_final,
+                "message": message_final
             }
         else:
             db.delete(new_phase)
