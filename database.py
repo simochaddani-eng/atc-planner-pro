@@ -1,6 +1,6 @@
 # database.py
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Date, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Date, ForeignKey, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -13,6 +13,14 @@ SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
 # --- MODÈLES ---
+
+class Instructor(Base):
+    __tablename__ = 'instructors'
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, unique=True)
+    max_hours_per_day = Column(Integer, default=8)
+    available = Column(Boolean, default=True)
+
 class Promotion(Base):
     __tablename__ = 'promotions'
     id = Column(Integer, primary_key=True, index=True)
@@ -60,4 +68,23 @@ class InstructorAssign(Base):
     
     phase = relationship("Phase", back_populates="instructor_assignments")
 
+# Création automatique des tables
 Base.metadata.create_all(bind=engine)
+
+# --- PEUPLEMENT INITIAL (Si la table est vide) ---
+def init_default_instructors():
+    db = SessionLocal()
+    if db.query(Instructor).count() == 0:
+        defaults = [
+            Instructor(name="Alexandre Martin", max_hours_per_day=8, available=True),
+            Instructor(name="Sophie Bernard", max_hours_per_day=6, available=True),
+            Instructor(name="Thomas Leroy", max_hours_per_day=8, available=True),
+            Instructor(name="Julien Moreau", max_hours_per_day=8, available=True),
+            Instructor(name="Camille Dupont", max_hours_per_day=5, available=True),
+            Instructor(name="Élise Petit", max_hours_per_day=8, available=True),
+        ]
+        db.add_all(defaults)
+        db.commit()
+    db.close()
+
+init_default_instructors()
