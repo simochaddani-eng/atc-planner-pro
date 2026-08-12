@@ -1,12 +1,13 @@
-# app.py (Version avec Correction de l'erreur SQLAlchemy)
+# app.py (Version CORRIGÉE avec gestion d'état)
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
+from sqlalchemy.orm import joinedload
 from scheduler_ortools import ATCSchedulerORTools
 from export_utils import generate_excel, generate_pdf
 from config_data import INSTRUCTORS, SIMULATORS
-from database import SessionLocal, Promotion, Phase, TimeSlot
+from database import SessionLocal, Promotion, Phase, TimeSlot, InstructorAssign
 
 st.set_page_config(page_title="ATC Planner - Dashboard", layout="wide")
 
@@ -15,30 +16,38 @@ try:
     with open('style.css') as f:
         st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 except FileNotFoundError:
-    pass # Si le fichier CSS n'est pas encore là, on ignore
+    pass 
 
+# --- INITIALISATION DU MOTEUR ---
 if 'scheduler_ortools' not in st.session_state:
     st.session_state.scheduler_ortools = ATCSchedulerORTools()
 if 'current_phase_id' not in st.session_state:
     st.session_state.current_phase_id = None
+
+# --- CHARGEMENT DES DONNÉES (EXÉCUTÉ À CHAQUE RAFRAÎCHISSEMENT) ---
+# On ouvre la session UNE SEULE FOIS au début du script
+db = SessionLocal()
+
+# On récupère TOUTES les données nécessaires en une seule requête optimisée (joinedload)
+promotions = db.query(Promotion).options(
+    joinedload(Promotion.phases).joinedload(Phase.instructor_assignments)
+).order_by(Promotion.created_at.desc()).all()
+
+# On récupère aussi toutes les phases pour le Dashboard
+all_phases = db.query(Phase).all()
+
+# On ferme la base de données IMMÉDIATEMENT après avoir tout chargé en mémoire
+db.close()
 
 # --- SIDEBAR ---
 with st.sidebar:
     st.title("ATC Planner Pro")
     st.write("Moteur OR-Tools")
     
-    # ----- CORRECTION ICI -----
-    db = SessionLocal()
-    # On récupère les promotions et on utilise .all() pour forcer le chargement immédiat de TOUTES les données (promos + phases)
-    # Ensuite on ferme la base de données.
-    promotions = db.query(Promotion).order_by(Promotion.created_at.desc()).all()
-    db.close()
-    # --------------------------
-    
     st.subheader("Historique")
+    # On boucle sur les objets promotion déjà chargés en RAM
     for promo in promotions:
         with st.expander(f"📌 {promo.name}"):
-            # Maintenant, 'promo.phases' est déjà chargé en mémoire, il n'y aura pas d'erreur
             for phase in promo.phases:
                 status_emoji = "✅" if phase.status == "Terminée" else "🔄" if phase.status == "En cours" else "📅"
                 if st.button(f"{status_emoji} {phase.phase_type}", key=f"btn_{phase.id}"):
@@ -49,12 +58,11 @@ with st.sidebar:
 st.title("ATC Planner - Gestion des simulateurs")
 
 # --- PARTIE 1 : LES 4 ENCARTS KPI ---
-# On rouvre une connexion propre pour les stats
-db = SessionLocal()
-all_phases = db.query(Phase).all()
+# Calcul des stats basé sur les listes déjà chargées en mémoire
 active_phases = [p for p in all_phases if p.status != "Terminée"]
-total_instructors_aff = len(set([i.instructor_name for p in all_phases for i in p.instructor_assignments]))
-db.close()
+# Calcul des instructeurs uniques
+all_assignments = [i for phase in all_phases for i in phase.instructor_assignments]
+total_instructors_aff = len(set([i.instructor_name for i in all_assignments]))
 
 col1, col2, col3, col4 = st.columns(4)
 
@@ -98,6 +106,7 @@ st.divider()
 
 # --- PARTIE 2 : ZONE DE CRÉATION OU VISUALISATION ---
 if st.session_state.current_phase_id:
+    # On passe l'ID au moteur, qui va rouvrir une session, charger juste ces infos, et fermer proprement
     phase, slots, instructors = st.session_state.scheduler_ortools.get_phase_details(st.session_state.current_phase_id)
     
     if phase:
@@ -109,7 +118,6 @@ if st.session_state.current_phase_id:
             st.metric("Date de fin estimée", phase.end_date_estimated.strftime("%d/%m/%Y") if phase.end_date_estimated else "Non définie")
             st.metric("Groupes", len(set(s.group_name for s in slots)))
             
-            # Boutons d'export
             if st.button("📊 Générer le rapport PDF"):
                 pdf_buffer = generate_pdf(slots, phase.phase_type, phase.promotion.name)
                 st.download_button("Télécharger PDF", data=pdf_buffer, file_name=f"Rapport_{phase.phase_type}.pdf")
