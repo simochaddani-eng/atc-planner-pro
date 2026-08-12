@@ -1,4 +1,4 @@
-# app.py (Version CORRIGÉE avec gestion d'état)
+# app.py (Version FINALE avec correction de tous les DetachedInstanceError)
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -25,18 +25,15 @@ if 'current_phase_id' not in st.session_state:
     st.session_state.current_phase_id = None
 
 # --- CHARGEMENT DES DONNÉES (EXÉCUTÉ À CHAQUE RAFRAÎCHISSEMENT) ---
-# On ouvre la session UNE SEULE FOIS au début du script
 db = SessionLocal()
-
-# On récupère TOUTES les données nécessaires en une seule requête optimisée (joinedload)
-promotions = db.query(Promotion).options(
-    joinedload(Promotion.phases).joinedload(Phase.instructor_assignments)
+# Requête optimisée pour la sidebar (Promotions + Phases)
+promotions_sidebar = db.query(Promotion).options(
+    joinedload(Promotion.phases)
 ).order_by(Promotion.created_at.desc()).all()
-
-# On récupère aussi toutes les phases pour le Dashboard
-all_phases = db.query(Phase).all()
-
-# On ferme la base de données IMMÉDIATEMENT après avoir tout chargé en mémoire
+# Requête pour le Dashboard (Toutes les phases avec leurs instructeurs)
+all_phases_dashboard = db.query(Phase).options(
+    joinedload(Phase.instructor_assignments)
+).all()
 db.close()
 
 # --- SIDEBAR ---
@@ -45,8 +42,7 @@ with st.sidebar:
     st.write("Moteur OR-Tools")
     
     st.subheader("Historique")
-    # On boucle sur les objets promotion déjà chargés en RAM
-    for promo in promotions:
+    for promo in promotions_sidebar:
         with st.expander(f"📌 {promo.name}"):
             for phase in promo.phases:
                 status_emoji = "✅" if phase.status == "Terminée" else "🔄" if phase.status == "En cours" else "📅"
@@ -59,9 +55,8 @@ st.title("ATC Planner - Gestion des simulateurs")
 
 # --- PARTIE 1 : LES 4 ENCARTS KPI ---
 # Calcul des stats basé sur les listes déjà chargées en mémoire
-active_phases = [p for p in all_phases if p.status != "Terminée"]
-# Calcul des instructeurs uniques
-all_assignments = [i for phase in all_phases for i in phase.instructor_assignments]
+active_phases = [p for p in all_phases_dashboard if p.status != "Terminée"]
+all_assignments = [i for phase in all_phases_dashboard for i in phase.instructor_assignments]
 total_instructors_aff = len(set([i.instructor_name for i in all_assignments]))
 
 col1, col2, col3, col4 = st.columns(4)
@@ -71,7 +66,7 @@ with col1:
     <div class="kpi-card">
         <div class="kpi-title">Promotions actives</div>
         <div class="kpi-value">{len(active_phases)}</div>
-        <div class="kpi-delta">📚 Total : {len(all_phases)} phases</div>
+        <div class="kpi-delta">📚 Total : {len(all_phases_dashboard)} phases</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -97,8 +92,8 @@ with col4:
     st.markdown(f"""
     <div class="kpi-card">
         <div class="kpi-title">Phases en cours</div>
-        <div class="kpi-value">{len([p for p in all_phases if p.status == 'En cours'])}</div>
-        <div class="kpi-delta">🔄 {len([p for p in all_phases if p.status == 'Planifiée'])} planifiées</div>
+        <div class="kpi-value">{len([p for p in all_phases_dashboard if p.status == 'En cours'])}</div>
+        <div class="kpi-delta">🔄 {len([p for p in all_phases_dashboard if p.status == 'Planifiée'])} planifiées</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -106,11 +101,15 @@ st.divider()
 
 # --- PARTIE 2 : ZONE DE CRÉATION OU VISUALISATION ---
 if st.session_state.current_phase_id:
-    # On passe l'ID au moteur, qui va rouvrir une session, charger juste ces infos, et fermer proprement
     phase, slots, instructors = st.session_state.scheduler_ortools.get_phase_details(st.session_state.current_phase_id)
     
     if phase:
-        st.subheader(f"📋 {phase.phase_type} - {phase.promotion.name}")
+        # CORRECTION ICI : On récupère le nom de la promotion via une nouvelle requête pour éviter l'erreur
+        db = SessionLocal()
+        promo_name = db.query(Promotion.name).filter(Promotion.id == phase.promotion_id).scalar()
+        db.close()
+        
+        st.subheader(f"📋 {phase.phase_type} - {promo_name}")
         
         col_left, col_right = st.columns([2, 1])
         with col_left:
@@ -118,10 +117,10 @@ if st.session_state.current_phase_id:
             st.metric("Date de fin estimée", phase.end_date_estimated.strftime("%d/%m/%Y") if phase.end_date_estimated else "Non définie")
             st.metric("Groupes", len(set(s.group_name for s in slots)))
             
-            if st.button("📊 Générer le rapport PDF"):
-                pdf_buffer = generate_pdf(slots, phase.phase_type, phase.promotion.name)
+            if st.button("📊 Générer le rapport PDF", key="btn_pdf"):
+                pdf_buffer = generate_pdf(slots, phase.phase_type, promo_name)
                 st.download_button("Télécharger PDF", data=pdf_buffer, file_name=f"Rapport_{phase.phase_type}.pdf")
-            if st.button("📊 Générer le rapport Excel"):
+            if st.button("📊 Générer le rapport Excel", key="btn_xlsx"):
                 excel_buffer = generate_excel(slots, phase.phase_type)
                 st.download_button("Télécharger Excel", data=excel_buffer, file_name=f"Rapport_{phase.phase_type}.xlsx")
 
