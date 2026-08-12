@@ -1,4 +1,4 @@
-# app.py (Version avec le Design des Maquettes)
+# app.py (Version avec Correction de l'erreur SQLAlchemy)
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -11,8 +11,11 @@ from database import SessionLocal, Promotion, Phase, TimeSlot
 st.set_page_config(page_title="ATC Planner - Dashboard", layout="wide")
 
 # --- CHARGEMENT DU CSS ---
-with open('style.css') as f:
-    st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+try:
+    with open('style.css') as f:
+        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+except FileNotFoundError:
+    pass # Si le fichier CSS n'est pas encore là, on ignore
 
 if 'scheduler_ortools' not in st.session_state:
     st.session_state.scheduler_ortools = ATCSchedulerORTools()
@@ -24,13 +27,18 @@ with st.sidebar:
     st.title("ATC Planner Pro")
     st.write("Moteur OR-Tools")
     
+    # ----- CORRECTION ICI -----
     db = SessionLocal()
+    # On récupère les promotions et on utilise .all() pour forcer le chargement immédiat de TOUTES les données (promos + phases)
+    # Ensuite on ferme la base de données.
     promotions = db.query(Promotion).order_by(Promotion.created_at.desc()).all()
     db.close()
+    # --------------------------
     
     st.subheader("Historique")
     for promo in promotions:
         with st.expander(f"📌 {promo.name}"):
+            # Maintenant, 'promo.phases' est déjà chargé en mémoire, il n'y aura pas d'erreur
             for phase in promo.phases:
                 status_emoji = "✅" if phase.status == "Terminée" else "🔄" if phase.status == "En cours" else "📅"
                 if st.button(f"{status_emoji} {phase.phase_type}", key=f"btn_{phase.id}"):
@@ -40,8 +48,8 @@ with st.sidebar:
 # --- PAGE PRINCIPALE DASHBOARD ---
 st.title("ATC Planner - Gestion des simulateurs")
 
-# --- PARTIE 1 : LES 4 ENCARTS KPI (Comme la Maquette 1) ---
-# Récupération des données pour les encarts
+# --- PARTIE 1 : LES 4 ENCARTS KPI ---
+# On rouvre une connexion propre pour les stats
 db = SessionLocal()
 all_phases = db.query(Phase).all()
 active_phases = [p for p in all_phases if p.status != "Terminée"]
@@ -90,19 +98,29 @@ st.divider()
 
 # --- PARTIE 2 : ZONE DE CRÉATION OU VISUALISATION ---
 if st.session_state.current_phase_id:
-    # (Si une phase est sélectionnée : Code d'affichage du planning que vous aviez déjà)
     phase, slots, instructors = st.session_state.scheduler_ortools.get_phase_details(st.session_state.current_phase_id)
+    
     if phase:
         st.subheader(f"📋 {phase.phase_type} - {phase.promotion.name}")
+        
         col_left, col_right = st.columns([2, 1])
         with col_left:
             st.metric("Date de début", phase.start_date.strftime("%d/%m/%Y"))
-            st.metric("Date de fin estimée", phase.end_date_estimated.strftime("%d/%m/%Y"))
+            st.metric("Date de fin estimée", phase.end_date_estimated.strftime("%d/%m/%Y") if phase.end_date_estimated else "Non définie")
             st.metric("Groupes", len(set(s.group_name for s in slots)))
-        with col_right:
-            if st.button("📊 Générer le rapport PDF", type="primary"):
+            
+            # Boutons d'export
+            if st.button("📊 Générer le rapport PDF"):
                 pdf_buffer = generate_pdf(slots, phase.phase_type, phase.promotion.name)
                 st.download_button("Télécharger PDF", data=pdf_buffer, file_name=f"Rapport_{phase.phase_type}.pdf")
+            if st.button("📊 Générer le rapport Excel"):
+                excel_buffer = generate_excel(slots, phase.phase_type)
+                st.download_button("Télécharger Excel", data=excel_buffer, file_name=f"Rapport_{phase.phase_type}.xlsx")
+
+        with col_right:
+            st.write("**Instructeurs :**")
+            for ins in instructors:
+                st.write(f"- {ins.group_name} : {ins.instructor_name}")
 
         # Graphique Gantt
         if slots:
@@ -113,14 +131,15 @@ if st.session_state.current_phase_id:
                 "simulator": s.simulator,
                 "instructor": s.instructor_name
             } for s in slots])
-            fig = px.timeline(df_plot, x_start="start", x_end="end", y="simulator", color="group_name", title="Occupation des simulateurs")
+            fig = px.timeline(df_plot, x_start="start", x_end="end", y="simulator", color="group_name", 
+                              hover_data=["instructor"], title="Occupation des simulateurs")
             st.plotly_chart(fig, use_container_width=True)
 
 else:
-    # (Si aucune phase sélectionnée : Formulaire de création)
     st.info("➕ Créez une nouvelle phase de simulation ci-dessous.")
     with st.container(border=True):
         st.subheader("Créer une nouvelle phase (avec IA)")
+        
         col_f1, col_f2 = st.columns(2)
         with col_f1:
             promo_name = st.text_input("Nom de la promotion", value="P2025-G")
