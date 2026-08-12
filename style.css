@@ -1,0 +1,45 @@
+/* style.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+
+/* En-têtes KPI (Les 4 gros encarts) */
+.kpi-card {
+    background-color: #f0f2f6;
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    margin-bottom: 20px;
+}
+.kpi-title {
+    font-size: 14px;
+    color: #555;
+    font-weight: 600;
+}
+.kpi-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: #1f1f1f;
+}
+.kpi-delta {
+    font-size: 12px;
+    color: #4CAF50;
+    font-weight: 600;
+}
+
+/* Boutons principaux */
+.stButton > button {
+    width: 100%;
+    border-radius: 8px;
+    font-weight: 600;
+    background-color: #0e1117;
+    color: white;
+    border: 1px solid #4CAF50;
+}
+.stButton > button:hover {
+    background-color: #4CAF50;
+    color: white;
+}
