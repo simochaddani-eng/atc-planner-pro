@@ -2,7 +2,7 @@
 import datetime
 from ortools.sat.python import cp_model
 from database import SessionLocal, Promotion, Phase, TimeSlot, InstructorAssign
-from config_data import INSTRUCTORS
+from config_data import get_instructors
 
 class ATCSchedulerORTools:
     
@@ -83,7 +83,9 @@ class ATCSchedulerORTools:
         status = solver.Solve(model)
 
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-            available_instructors = [ins for ins in INSTRUCTORS if ins["available"]]
+            # --- CORRECTION ICI : On utilise la base de données dynamique ---
+            available_instructors = get_instructors()
+            # --------------------------------------------------------------
             
             plan_slots = []
             for g in range(1, groups_count + 1):
@@ -117,13 +119,12 @@ class ATCSchedulerORTools:
             
             db.commit()
             
-            # --- CORRECTION ICI : On lit les données avant de fermer ---
+            # Lecture des données avant fermeture
             phase_id_final = new_phase.id
             groups_count_final = groups_count
             total_hours_final = round((groups_count * sessions_per_student * duration_min) / 60, 1)
             end_date_final = end_date.strftime("%d/%m/%Y")
             message_final = f"Planning optimal généré par OR-Tools pour {promo_name}."
-            # ---------------------------------------------------------
             
             db.close()
             
